@@ -4,8 +4,6 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from collections import defaultdict
 import os
 import time
-import threading
-from flask import Flask
 
 # --- Конфигурация ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -16,12 +14,12 @@ if BOT_TOKEN is None or ADMIN_CHAT_ID is None:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- ВАШ КОД ЛОГИКИ БОТА (ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ) ---
-# ... (вставьте сюда ВЕСЬ ваш код от user_answers до callback_inline) ...
+# --- ЛОГИКА БОТА ---
+
 # Глобальный словарь для хранения ответов пользователей
 user_answers = defaultdict(dict)
 
-# --- Тексты вопросов и ответов (без изменений) ---
+# Тексты вопросов и ответов
 QUESTIONS_DATA = {
     'q1': {
         'text': 'Вы проводили неформальные интервью с клиентами (не продавая, а изучая их проблемы) за последние 3 месяца?',
@@ -158,15 +156,12 @@ QUESTIONS_DATA = {
     }
 }
 
-
-# --- Надежная функция экранирования ---
+# Функция экранирования
 def escape_markdown_v2(text: str) -> str:
-    """Экранирует все специальные символы для Telegram MarkdownV2."""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
 
-
-# --- Структура данных для вердиктов ---
+# Структура данных для вердиктов
 VERDICT_DATA = {
     'verdikt1': {
         'name': "Стабильность (трекинг не требуется)",
@@ -239,8 +234,7 @@ VERDICT_DATA = {
     }
 }
 
-
-# --- Функция notify_admin ---
+# Функция для отправки уведомления администратору
 def notify_admin(user_id, data, verdict_name, verdict_full_text):
     try:
         user_info = bot.get_chat(user_id)
@@ -250,7 +244,7 @@ def notify_admin(user_id, data, verdict_name, verdict_full_text):
         message_text = f"✅ *Новая анкета заполнена\\!* \n\n"
         message_text += f"👤 *Пользователь:* @{username} \\({first_name}\\)\n"
         message_text += f"🆔 *User ID:* `{user_id}`\n\n"
-        message_text += f"📝 *\\-\\-* Ответы *\\-\\-\\-*\n" # Упрощено для MarkdownV2
+        message_text += f"📝 *\\-\\-* Ответы *\\-\\-\\-*\n"
 
         for i in range(1, len(QUESTIONS_DATA) + 1):
             q_code = f'q{i}'
@@ -272,29 +266,26 @@ def notify_admin(user_id, data, verdict_name, verdict_full_text):
         print(f"Ошибка при отправке админу: {e}")
         bot.send_message(ADMIN_CHAT_ID, f"Не удалось сформировать отчет по анкете от пользователя {user_id}.")
 
-
-# --- Упрощенная функция отправки вердиктов ---
+# Функция для отправки вердикта пользователю
 def send_verdict(chat_id, verdict_key):
-    """Универсальная функция для отправки любого вердикта."""
     data = VERDICT_DATA[verdict_key]
     text = data['text']
-
     markup = InlineKeyboardMarkup()
+    buttons = {
+        'verdikt1': ("Спасибо, было полезно", "feedback_thanks"),
+        'verdikt2': ("Запланировать стратегическую сессию", "https://t.me/natalia_koch"),
+        'verdikt3': ("Провести диагностику узкого места", "https://t.me/natalia_koch"),
+        'verdikt4': ("Составить план по делегированию", "https://t.me/natalia_koch"),
+        'verdikt5': ("Записаться на антикризисную диагностику", "https://t.me/natalia_koch")
+    }
+    btn_text, btn_data = buttons.get(verdict_key)
     if verdict_key == 'verdikt1':
-        markup.add(InlineKeyboardButton("Спасибо, было полезно", callback_data="feedback_thanks"))
-    elif verdict_key == 'verdikt2':
-        markup.add(InlineKeyboardButton("Запланировать стратегическую сессию", url="https://t.me/natalia_koch"))
-    elif verdict_key == 'verdikt3':
-        markup.add(InlineKeyboardButton("Провести диагностику узкого места", url="https://t.me/natalia_koch"))
-    elif verdict_key == 'verdikt4':
-        markup.add(InlineKeyboardButton("Составить план по делегированию", url="https://t.me/natalia_koch"))
-    elif verdict_key == 'verdikt5':
-        markup.add(InlineKeyboardButton("Записаться на антикризисную диагностику", url="https://t.me/natalia_koch"))
-
+        markup.add(InlineKeyboardButton(btn_text, callback_data=btn_data))
+    else:
+        markup.add(InlineKeyboardButton(btn_text, url=btn_data))
     bot.send_message(chat_id, text, reply_markup=markup)
 
-
-# --- ОСНОВНАЯ ЛОГИКА БОТА ---
+# Обработчик команды /start
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     global user_answers
@@ -306,7 +297,7 @@ def send_welcome(message):
     bot.send_message(user_id, welcome_text)
     ask_question(user_id, 'q1')
 
-
+# Функция для отправки вопроса
 def ask_question(chat_id, question_code):
     q_data = QUESTIONS_DATA[question_code]
     markup = InlineKeyboardMarkup(row_width=1)
@@ -314,7 +305,7 @@ def ask_question(chat_id, question_code):
         markup.add(InlineKeyboardButton(text, callback_data=callback_data))
     bot.send_message(chat_id, q_data['text'], reply_markup=markup)
 
-
+# Обработчик ответов на вопросы
 @bot.callback_query_handler(func=lambda call: call.data.startswith('q'))
 def handle_quiz_callback(call):
     global user_answers
@@ -331,16 +322,15 @@ def handle_quiz_callback(call):
     next_q_number = current_q_number + 1
     next_question_code = f'q{next_q_number}'
 
-    if next_question_code == 'q3':
-        bot.send_message(user_id, 'Спасибо. Пройдено 20%. Переходим к продажам.')
-    elif next_question_code == 'q6':
-        bot.send_message(user_id, 'Принято. Мы на экваторе. Теперь о финансовом здоровье.')
-    elif next_question_code == 'q9':
-        bot.send_message(user_id, 'Отлично. Пройдено 60%. Теперь об управлении и команде.')
-    elif next_question_code == 'q11':
-        bot.send_message(user_id, 'Принято. Пройдено 80%. Теперь очень важный блок о скорости и гибкости.')
-    elif next_question_code == 'q13':
-        bot.send_message(user_id, 'Финальный рывок! Остался последний блок — о вас и будущем.')
+    progress_messages = {
+        'q3': 'Спасибо. Пройдено 20%. Переходим к продажам.',
+        'q6': 'Принято. Мы на экваторе. Теперь о финансовом здоровье.',
+        'q9': 'Отлично. Пройдено 60%. Теперь об управлении и команде.',
+        'q11': 'Принято. Пройдено 80%. Теперь очень важный блок о скорости и гибкости.',
+        'q13': 'Финальный рывок! Остался последний блок — о вас и будущем.'
+    }
+    if next_question_code in progress_messages:
+        bot.send_message(user_id, progress_messages[next_question_code])
 
     if next_question_code in QUESTIONS_DATA:
         ask_question(user_id, next_question_code)
@@ -348,8 +338,7 @@ def handle_quiz_callback(call):
         bot.send_message(user_id, 'Спасибо, это был последний вопрос. Готовлю для вас персональный вывод...')
         analyze_results(user_id)
 
-
-# --- Функция analyze_results ---
+# Функция анализа результатов
 def analyze_results(user_id):
     data = user_answers.get(user_id)
     if not data or len(data) < len(QUESTIONS_DATA):
@@ -357,62 +346,39 @@ def analyze_results(user_id):
                          "Кажется, произошла ошибка, и я не получил все ответы. Пожалуйста, начните диагностику заново с помощью команды /start.")
         return
 
-    q11, q21, q23 = data['q11'], data['q21'], data['q23']
-    q31, q41, q42 = data['q31'], data['q41'], data['q42']
-    q51, q52, q61, q62 = data['q51'], data['q52'], data['q61'], data['q62']
+    q_values = {key: data.get(QUESTIONS_DATA[q]['key']) for q, key in zip(QUESTIONS_DATA, ['q11', 'q12', 'q21', 'q22', 'q23', 'q31', 'q32', 'q33', 'q41', 'q42', 'q51', 'q52', 'q61', 'q62'])}
 
-    verdict_key = 'verdikt2'
-    if (
-            q31 == 'Работаем в ноль или в убыток' and q42 == 'Постоянно, тушим пожары' and q52 == "Любые изменения рушат ход дел") or (
-            q62 == "Финансовая нестабильность"):
+    verdict_key = 'verdikt2' # Вердикт по умолчанию
+    
+    if (q_values['q31'] == 'Работаем в ноль или в убыток' and q_values['q42'] == 'Постоянно, тушим пожары' and q_values['q52'] == "Любые изменения рушат ход дел") or (q_values['q62'] == "Финансовая нестабильность"):
         verdict_key = 'verdikt5'
-    elif (q23 in ['Многие переговоры и закрытия', 'Практически все этапы']) and (
-            q41 == 'Нет, моя команда не справиться') and (q62 == 'Огромное количество операционки'):
+    elif (q_values['q23'] in ['Многие переговоры и закрытия', 'Практически все этапы']) and (q_values['q41'] == 'Нет, моя команда не справиться') and (q_values['q62'] == 'Огромное количество операционки'):
         verdict_key = 'verdikt4'
-    elif (q21 == 'Нет, процесс непредсказуем') and (q31 == 'Прибыль плавает') and (
-            q11 == 'Не было времени/не видели смысла') and (q51 in ['Больше месяца', 'Мы так не работаем']) and (
-            q62 == "Медленный рост, ощущение плато"):
+    elif (q_values['q21'] == 'Нет, процесс непредсказуем') and (q_values['q31'] == 'Прибыль плавает') and (q_values['q11'] == 'Не было времени/не видели смысла') and (q_values['q51'] in ['Больше месяца', 'Мы так не работаем']) and (q_values['q62'] == "Медленный рост, ощущение плато"):
         verdict_key = 'verdikt3'
-    elif (
-            q61 == "Обеспечить стабильность" and q31 == 'Прибыль стабильна или растет' and q41 == 'Да, команда автономна') or q62 == "Меня ничего не беспокоит":
+    elif (q_values['q61'] == "Обеспечить стабильность" and q_values['q31'] == 'Прибыль стабильна или растет' and q_values['q41'] == 'Да, команда автономна') or q_values['q62'] == "Меня ничего не беспокоит":
         verdict_key = 'verdikt1'
 
     verdict_info = VERDICT_DATA[verdict_key]
     notify_admin(user_id, data, verdict_info['name'], verdict_info['text'])
     send_verdict(user_id, verdict_key)
 
-
+# Обработчик отзыва
 @bot.callback_query_handler(func=lambda call: call.data == "feedback_thanks")
 def callback_inline(call):
     bot.answer_callback_query(call.id, "Спасибо за ваш отзыв!")
     text = escape_markdown_v2(call.message.text) + "\n\n✅ *Отзыв получен, спасибо\\!*"
-    bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text,
+    bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.id, text=text,
                           parse_mode="MarkdownV2", reply_markup=None)
 
-# --- ЗАПУСК ---
 
-# Функция для запуска polling в отдельном потоке
-def run_polling():
+# --- ЗАПУСК БОТА ---
+if __name__ == '__main__':
     while True:
         try:
-            print("Бот запущен (polling)...")
+            print("Бот запущен на Railway (polling)...")
             bot.polling(none_stop=True)
         except Exception as e:
-            print(f"Polling упал с ошибкой: {e}")
+            print(f"Критическая ошибка: {e}")
+            print("Перезапуск через 15 секунд...")
             time.sleep(15)
-            print("Перезапуск polling...")
-
-# Создаем веб-сервер Flask для "проверки здоровья"
-app = Flask(__name__)
-@app.route('/')
-def index():
-    return "Bot is alive and polling!", 200
-
-# Запускаем polling в отдельном потоке, а Flask в основном
-if __name__ == "__main__":
-    polling_thread = threading.Thread(target=run_polling)
-    polling_thread.daemon = True
-    polling_thread.start()
-
-    # Flask запускается для того, чтобы Render считал сервис рабочим
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
