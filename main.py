@@ -3,18 +3,23 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from collections import defaultdict
 import os
-import threading
-from flask import Flask
+from flask import Flask, request
+import logging
 
 # --- Конфигурация ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID')
+# ИЗМЕНЕНИЕ: URL вашего сервиса на Render
+APP_URL = f"https://newbot-github-io.onrender.com/{BOT_TOKEN}"
 
-if BOT_TOKEN is None or ADMIN_CHAT_ID is None:
+if not BOT_TOKEN or not ADMIN_CHAT_ID:
     raise ValueError("Переменные окружения BOT_TOKEN и ADMIN_CHAT_ID не установлены!")
 
+# --- Инициализация ---
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
+logger = telebot.logger
+telebot.logger.setLevel(logging.INFO)
 
 # --- ВЕСЬ ВАШ КОД БОТА (QUESTIONS_DATA, VERDICT_DATA, обработчики) ИДЕТ ЗДЕСЬ ---
 # ... (просто скопируйте сюда всю вашу логику без изменений) ...
@@ -390,26 +395,34 @@ def callback_inline(call):
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text,
                           parse_mode="MarkdownV2", reply_markup=None)
 
-
 # <... Конец вашего кода ...>
 
-# --- БЛОК ДЛЯ ЗАПУСКА НА RENDER.COM ---
+# --- ИЗМЕНЕНИЕ: БЛОК ДЛЯ ЗАПУСКА НА RENDER.COM через WEBHOOKS ---
+
+# Маршрут для приема обновлений от Telegram
+@app.route('/' + BOT_TOKEN, methods=['POST'])
+def get_message():
+    json_string = request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return "!", 200
+
+# Маршрут для проверки "здоровья" сервиса (для UptimeRobot)
+@app.route('/health')
+def health_check():
+    return "ok", 200
+
+# Маршрут для установки вебхука (вызывать вручную один раз)
+@app.route('/set_webhook')
+def webhook():
+    bot.remove_webhook()
+    bot.set_webhook(url=APP_URL)
+    return "Webhook set to " + APP_URL, 200
+
+# Основной маршрут, чтобы UptimeRobot не видел ошибку 404
 @app.route('/')
 def index():
-    return "I am alive!"
+    return "Bot is running...", 200
 
-
-def run_web_server():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
-
-
-if __name__ == '__main__':
-    print("Запускаю веб-сервер в отдельном потоке...")
-    server_thread = threading.Thread(target=run_web_server)
-    server_thread.start()
-
-    print("Запускаю бота...")
-    try:
-        bot.polling(none_stop=True)
-    except Exception as e:
-        print(f"Бот упал с ошибкой: {e}")
+# ИЗМЕНЕНИЕ: УДАЛЕН ЗАПУСК ЧЕРЕЗ POLLING И THREADING
+# Веб-сервер будет запущен gunicorn'ом, который вы укажете в настройках Render
