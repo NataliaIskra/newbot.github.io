@@ -4,6 +4,8 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from collections import defaultdict
 import os
 import time
+import threading
+from flask import Flask
 
 # --- Конфигурация ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -14,7 +16,7 @@ if BOT_TOKEN is None or ADMIN_CHAT_ID is None:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- ВЕСЬ ВАШ КОД БОТА (QUESTIONS_DATA, VERDICT_DATA, обработчики) ИДЕТ ЗДЕСЬ ---
+# --- ВАШ КОД ЛОГИКИ БОТА (ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ) ---
 # ... (вставьте сюда ВЕСЬ ваш код от user_answers до callback_inline) ...
 # Глобальный словарь для хранения ответов пользователей
 user_answers = defaultdict(dict)
@@ -248,7 +250,7 @@ def notify_admin(user_id, data, verdict_name, verdict_full_text):
         message_text = f"✅ *Новая анкета заполнена\\!* \n\n"
         message_text += f"👤 *Пользователь:* @{username} \\({first_name}\\)\n"
         message_text += f"🆔 *User ID:* `{user_id}`\n\n"
-        message_text += f"📝 *\\-\\-\\- Ответы \\-\\-\\-*\n"
+        message_text += f"📝 *\\-\\-* Ответы *\\-\\-\\-*\n" # Упрощено для MarkdownV2
 
         for i in range(1, len(QUESTIONS_DATA) + 1):
             q_code = f'q{i}'
@@ -387,13 +389,30 @@ def callback_inline(call):
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text,
                           parse_mode="MarkdownV2", reply_markup=None)
 
-# --- НАДЕЖНЫЙ ЗАПУСК БОТА С АВТОПЕРЕЗАПУСКОМ ---
-if __name__ == '__main__':
+# --- ЗАПУСК ---
+
+# Функция для запуска polling в отдельном потоке
+def run_polling():
     while True:
         try:
             print("Бот запущен (polling)...")
             bot.polling(none_stop=True)
         except Exception as e:
-            print(f"Произошла ошибка: {e}")
-            print("Перезапуск через 15 секунд...")
+            print(f"Polling упал с ошибкой: {e}")
             time.sleep(15)
+            print("Перезапуск polling...")
+
+# Создаем веб-сервер Flask для "проверки здоровья"
+app = Flask(__name__)
+@app.route('/')
+def index():
+    return "Bot is alive and polling!", 200
+
+# Запускаем polling в отдельном потоке, а Flask в основном
+if __name__ == "__main__":
+    polling_thread = threading.Thread(target=run_polling)
+    polling_thread.daemon = True
+    polling_thread.start()
+
+    # Flask запускается для того, чтобы Render считал сервис рабочим
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
