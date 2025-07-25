@@ -3,29 +3,18 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from collections import defaultdict
 import os
-from flask import Flask, request
-import logging
+import time
 
 # --- Конфигурация ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID')
 
-if not BOT_TOKEN or not ADMIN_CHAT_ID:
+if BOT_TOKEN is None or ADMIN_CHAT_ID is None:
     raise ValueError("Переменные окружения BOT_TOKEN и ADMIN_CHAT_ID не установлены!")
 
-APP_URL = f"https://newbot-github-io.onrender.com/{BOT_TOKEN}"
-
-# --- Инициализация ---
 bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__) # <-- Gunicorn будет искать эту переменную 'app'
 
-# Настраиваем логирование, чтобы видеть все в логах Render
-logger = logging.getLogger('gunicorn.error')
-app.logger.handlers = logger.handlers
-app.logger.setLevel(logging.INFO)
-
-
-# --- ВАШ КОД ЛОГИКИ БОТА (ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ) ---
+# --- ВЕСЬ ВАШ КОД БОТА (QUESTIONS_DATA, VERDICT_DATA, обработчики) ИДЕТ ЗДЕСЬ ---
 # ... (вставьте сюда ВЕСЬ ваш код от user_answers до callback_inline) ...
 # Глобальный словарь для хранения ответов пользователей
 user_answers = defaultdict(dict)
@@ -278,7 +267,7 @@ def notify_admin(user_id, data, verdict_name, verdict_full_text):
 
         bot.send_message(ADMIN_CHAT_ID, message_text, parse_mode="MarkdownV2")
     except Exception as e:
-        app.logger.error(f"Ошибка при отправке админу: {e}")
+        print(f"Ошибка при отправке админу: {e}")
         bot.send_message(ADMIN_CHAT_ID, f"Не удалось сформировать отчет по анкете от пользователя {user_id}.")
 
 
@@ -398,37 +387,13 @@ def callback_inline(call):
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text,
                           parse_mode="MarkdownV2", reply_markup=None)
 
-
-# --- КОНФИГУРАЦИЯ ВЕБ-СЕРВЕРА ---
-
-@app.route('/' + BOT_TOKEN, methods=['POST'])
-def get_message():
-    """Принимает обновления от Telegram."""
-    try:
-        app.logger.info("Получен запрос от Telegram")
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        app.logger.info("Запрос успешно обработан")
-        return "!", 200
-    except Exception as e:
-        app.logger.error(f"Критическая ошибка при обработке запроса: {e}")
-        return "Error", 500
-
-@app.route('/health')
-def health_check():
-    """Для проверки UptimeRobot."""
-    return "ok", 200
-
-@app.route('/set_webhook')
-def webhook():
-    """Устанавливает вебхук (вызывать вручную один раз)."""
-    bot.remove_webhook()
-    bot.set_webhook(url=APP_URL)
-    app.logger.info(f"Вебхук установлен на {APP_URL}")
-    return "Webhook set to " + APP_URL, 200
-
-@app.route('/')
-def index():
-    """Заглушка для корневого URL."""
-    return "Bot is running...", 200
+# --- НАДЕЖНЫЙ ЗАПУСК БОТА С АВТОПЕРЕЗАПУСКОМ ---
+if __name__ == '__main__':
+    while True:
+        try:
+            print("Бот запущен (polling)...")
+            bot.polling(none_stop=True)
+        except Exception as e:
+            print(f"Произошла ошибка: {e}")
+            print("Перезапуск через 15 секунд...")
+            time.sleep(15)
