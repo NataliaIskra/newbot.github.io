@@ -9,21 +9,24 @@ import logging
 # --- Конфигурация ---
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID')
-# ИЗМЕНЕНИЕ: URL вашего сервиса на Render
-APP_URL = f"https://newbot-github-io.onrender.com/{BOT_TOKEN}"
 
 if not BOT_TOKEN or not ADMIN_CHAT_ID:
     raise ValueError("Переменные окружения BOT_TOKEN и ADMIN_CHAT_ID не установлены!")
 
+APP_URL = f"https://newbot-github-io.onrender.com/{BOT_TOKEN}"
+
 # --- Инициализация ---
 bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__)
-logger = telebot.logger
-telebot.logger.setLevel(logging.INFO)
+app = Flask(__name__) # <-- Gunicorn будет искать эту переменную 'app'
 
-# --- ВЕСЬ ВАШ КОД БОТА (QUESTIONS_DATA, VERDICT_DATA, обработчики) ИДЕТ ЗДЕСЬ ---
-# ... (просто скопируйте сюда всю вашу логику без изменений) ...
-# <... Начало вашего кода ...>
+# Настраиваем логирование, чтобы видеть все в логах Render
+logger = logging.getLogger('gunicorn.error')
+app.logger.handlers = logger.handlers
+app.logger.setLevel(logging.INFO)
+
+
+# --- ВАШ КОД ЛОГИКИ БОТА (ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ) ---
+# ... (вставьте сюда ВЕСЬ ваш код от user_answers до callback_inline) ...
 # Глобальный словарь для хранения ответов пользователей
 user_answers = defaultdict(dict)
 
@@ -275,7 +278,7 @@ def notify_admin(user_id, data, verdict_name, verdict_full_text):
 
         bot.send_message(ADMIN_CHAT_ID, message_text, parse_mode="MarkdownV2")
     except Exception as e:
-        print(f"Ошибка при отправке админу: {e}")
+        app.logger.error(f"Ошибка при отправке админу: {e}")
         bot.send_message(ADMIN_CHAT_ID, f"Не удалось сформировать отчет по анкете от пользователя {user_id}.")
 
 
@@ -395,34 +398,37 @@ def callback_inline(call):
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=text,
                           parse_mode="MarkdownV2", reply_markup=None)
 
-# <... Конец вашего кода ...>
 
-# --- ИЗМЕНЕНИЕ: БЛОК ДЛЯ ЗАПУСКА НА RENDER.COM через WEBHOOKS ---
+# --- КОНФИГУРАЦИЯ ВЕБ-СЕРВЕРА ---
 
-# Маршрут для приема обновлений от Telegram
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def get_message():
-    json_string = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
-    return "!", 200
+    """Принимает обновления от Telegram."""
+    try:
+        app.logger.info("Получен запрос от Telegram")
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        app.logger.info("Запрос успешно обработан")
+        return "!", 200
+    except Exception as e:
+        app.logger.error(f"Критическая ошибка при обработке запроса: {e}")
+        return "Error", 500
 
-# Маршрут для проверки "здоровья" сервиса (для UptimeRobot)
 @app.route('/health')
 def health_check():
+    """Для проверки UptimeRobot."""
     return "ok", 200
 
-# Маршрут для установки вебхука (вызывать вручную один раз)
 @app.route('/set_webhook')
 def webhook():
+    """Устанавливает вебхук (вызывать вручную один раз)."""
     bot.remove_webhook()
     bot.set_webhook(url=APP_URL)
+    app.logger.info(f"Вебхук установлен на {APP_URL}")
     return "Webhook set to " + APP_URL, 200
 
-# Основной маршрут, чтобы UptimeRobot не видел ошибку 404
 @app.route('/')
 def index():
+    """Заглушка для корневого URL."""
     return "Bot is running...", 200
-
-# ИЗМЕНЕНИЕ: УДАЛЕН ЗАПУСК ЧЕРЕЗ POLLING И THREADING
-# Веб-сервер будет запущен gunicorn'ом, который вы укажете в настройках Render
