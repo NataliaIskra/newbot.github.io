@@ -6,6 +6,8 @@ import os
 import time
 
 # --- Конфигурация ---
+# Важно: Перед запуском установите переменные окружения BOT_TOKEN и ADMIN_CHAT_ID.
+# На Railway это делается в настройках сервиса, во вкладке "Variables".
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID')
 
@@ -265,31 +267,69 @@ def ask_question(chat_id, question_code):
     bot.send_message(chat_id, q_data['text'], reply_markup=markup)
 
 def analyze_results(user_id):
-    """Анализирует ответы пользователя и определяет вердикт."""
+    """Анализирует ответы пользователя и определяет вердикт по системе баллов."""
     data = user_answers.get(user_id)
     if not data or len(data) < len(QUESTIONS_DATA):
         bot.send_message(user_id,
                          "Кажется, произошла ошибка, и я не получил все ответы. Пожалуйста, начните диагностику заново с помощью команды /start.")
         return
+
     q_values = {}
     for q_code, q_info in QUESTIONS_DATA.items():
         q_values[q_info['key']] = data.get(q_info['key'])
-    verdict_key = 'verdikt2' # Default verdict
-    if (q_values['q31'] == 'Прибыль непредсказуема / не позволяет инвестировать в рост' and q_values['q42'] == 'Приоритеты часто меняются из-за внешних факторов (реактивная работа)' and q_values['q52'] == "На адаптацию уходит много времени и ресурсов, теряем темп") or (q_values['q62'] == "Непонятно, как управлять прибылью"):
-        verdict_key = 'verdikt5'
-    elif (q_values['q23'] in ['Многие переговоры и закрытия', 'Практически все этапы']) and (q_values['q41'] == 'Нет, моя команда не справиться') and (q_values['q62'] == 'Огромное количество операционки'):
-        verdict_key = 'verdikt4'
-    elif (q_values['q21'] == 'Нет, процесс непредсказуем') and (q_values['q31'] == 'Прибыль плавает') and (q_values['q11'] == 'Не было времени/не видели смысла') and (q_values['q51'] in ['Больше месяца', 'Мы так не работаем']) and (q_values['q62'] == "Медленный рост, ощущение плато"):
-        verdict_key = 'verdikt3'
-    elif (q_values['q61'] == "Обеспечить стабильность" and q_values['q31'] == 'Прибыль стабильна или растет' and q_values['q41'] == 'Да, команда автономна') or q_values['q62'] == "Меня ничего не беспокоит":
-        verdict_key = 'verdikt1'
+
+    scores = {
+        'verdikt1': 0, 'verdikt2': 0, 'verdikt3': 0, 'verdikt4': 0, 'verdikt5': 0
+    }
+
+    # --- Начисление баллов на основе ответов ---
+    # Баллы за СИСТЕМНЫЙ СБОЙ (verdikt5)
+    if q_values.get('q31') == 'Прибыль непредсказуема / не позволяет инвестировать в рост': scores['verdikt5'] += 2
+    if q_values.get('q42') == 'Приоритеты часто меняются из-за внешних факторов (реактивная работа)': scores['verdikt5'] += 2
+    if q_values.get('q52') == "На адаптацию уходит много времени и ресурсов, теряем темп": scores['verdikt5'] += 1
+    if q_values.get('q62') == "Непонятно, как управлять прибылью": scores['verdikt5'] += 3
+    if q_values.get('q33') == "Нет, это приведет только к хаосу": scores['verdikt5'] += 1
+
+    # Баллы за ДЕЛЕГИРОВАНИЕ (verdikt4)
+    if q_values.get('q23') in ['Многие переговоры и закрытия', 'Практически все этапы']: scores['verdikt4'] += 2
+    if q_values.get('q41') == 'Нет, моя команда не справиться': scores['verdikt4'] += 2
+    if q_values.get('q62') == 'Огромное количество операционки': scores['verdikt4'] += 3
+
+    # Баллы за ПЛАТО/ПОИСК РОСТА (verdikt3)
+    if q_values.get('q21') == 'Нет, процесс непредсказуем': scores['verdikt3'] += 1
+    if q_values.get('q31') == 'Прибыль плавает': scores['verdikt3'] += 1
+    if q_values.get('q11') == 'Не было времени/не видели смысла': scores['verdikt3'] += 1
+    if q_values.get('q51') in ['Больше месяца', 'Мы так не работаем']: scores['verdikt3'] += 2
+    if q_values.get('q62') == "Медленный рост, ощущение плато": scores['verdikt3'] += 3
+
+    # Баллы за СТАБИЛЬНОСТЬ (verdikt1)
+    if q_values.get('q62') == "Меня ничего не беспокоит": scores['verdikt1'] = 10
+    if q_values.get('q31') == 'Прибыль стабильна или растет': scores['verdikt1'] += 1
+    if q_values.get('q41') == 'Да, команда автономна': scores['verdikt1'] += 1
+    if q_values.get('q42') == 'Редко, мы следуем плану': scores['verdikt1'] += 1
+
+    # Баллы за СТРАТЕГИЮ (verdikt2)
+    if q_values.get('q61') != "Обеспечить стабильность": scores['verdikt2'] += 1
+    if q_values.get('q33') == 'Да, мы можем масштабироваться': scores['verdikt2'] += 2
+
+    # --- Определение финального вердикта ---
+    if scores['verdikt3'] > 0 or scores['verdikt4'] > 0 or scores['verdikt5'] > 0:
+        scores['verdikt1'] = -1
+
+    if max(scores.values()) > 0:
+        verdict_key = max(scores, key=scores.get)
+    else:
+        verdict_key = 'verdikt2'
+
+    if scores['verdikt5'] > 0 and scores['verdikt4'] > 0:
+        verdict_key = 'verdikt5' if scores['verdikt5'] >= scores['verdikt4'] else 'verdikt4'
+    
     verdict_info = VERDICT_DATA[verdict_key]
     notify_admin(user_id, data, verdict_info['name'], verdict_info['text'])
     send_verdict(user_id, verdict_key)
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    """Обработчик команды /start, запускает диагностику."""
     global user_answers
     user_id = message.chat.id
     user_answers[user_id] = {}
@@ -301,7 +341,6 @@ def send_welcome(message):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('q'))
 def handle_quiz_callback(call):
-    """Обрабатывает ответы на вопросы, сохраняет их и задает следующий вопрос."""
     global user_answers
     user_id = call.message.chat.id
     message_id = call.message.message_id
@@ -330,7 +369,6 @@ def handle_quiz_callback(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "feedback_thanks")
 def callback_inline(call):
-    """Обрабатывает нажатие на кнопку "Спасибо, было полезно"."""
     bot.answer_callback_query(call.id, "Спасибо за ваш отзыв!")
     text = escape_markdown_v2(call.message.text) + "\n\n✅ *Отзыв получен, спасибо\\!*"
     bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.id, text=text,
